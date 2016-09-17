@@ -1,0 +1,192 @@
+---
+title: "Evaluation on quality of an exercise using machine learning"
+author: "Masahito Tsukano"
+date: "September 11, 2016"
+output: html_document
+---
+#Abstract
+Traditional researches on recognising human movement generally focus on 
+how to identify the different types of activities such as sitting and standing, 
+using variety of signals from sensors attached on the subjects. 
+However, they rarely focus on whether or not subjects paform activity correctly. 
+Eduardo Velloso et al. focused on Weight Lifting Exercises and build up method to 
+evaluate how well the subjects perform certain exercise and the dataset 
+they collected is disclosed on their web site. 
+In this project, we used the dataset and built classifier to evaluate the exercise,
+as original research project did, by employing mechine learning method and 
+we confirmed that it finally attained 96% of accuracy for testing set.
+The data analysis is done with R language and 
+we employed caret package to deploy machine learing method.
+
+#About data
+The section introduces overview of the dataset collected in the original research from
+[*Eduardo Velloso et al.: Qualitative Activity Recognition of Weight Lifting Exercises*].
+
+In this research, 6 participants were asked to do Weight Lifting Exercises in a certain mannar.
+The movement of the subjects were measured through accelerometers on the belt, 
+forearm, arm, and dumbell and their parformance were classified
+into 5 classes which are Class A, B, C, D and E.
+The accelerometers provide three-axes acceleration, gyroscope and magnetometer data 
+at a joint sampling rate of 45 Hz.
+The quality of the activity is defined as follows:
+
+* *class A*: peforming the exercise correctly 
+* *Class B*: throwing the elbows to the front 
+* *Class C*: lifting the dumbbell only halfway 
+* *Class D*: lowering the dumbbell only halfway
+* *Class E*: throwing the hips to the front
+
+
+
+#Loading dataset
+The observation is given as csv file and we used R language to analyed it.
+
+The given datasets are:
+
+* *pml-training.csv*: observations which is used to train classifier and
+* *pml-testing.csv*: observations which is used to answer a quiz
+
+Note that labels (Class A, B, etc.) are not included in *pml-testing.csv*, 
+which means that the dataset cannot be used to evaluate the performance of the classifier.
+Therefore, we named *dataset* and *sample* for the observations loaded from the cvs files
+rather than *traning* and *testing* as the file names suggest. 
+
+```{r, message=FALSE, warning=FALSE}
+library(caret)
+dataset <- read.csv("pml-training.csv",row.names = 1)
+sample  <- read.csv("pml-testing.csv",row.names = 1)
+```
+
+#Feature selection
+As specified in *About data* section, accelerometers are attached on the belt, 
+forearm, arm, and dumbell and each accelerometer measures
+three-axes acceleration, gyroscope and magnetometer data. 
+In addition, total accelaration, the norm of accelaration for X, Y and X axes,
+is computed every time when the signales were sampled. 
+
+Note that the original csv files inclueds features with sparse observations. 
+This is because the observations are time series and extra features were computed 
+using past signals every certain period of time.
+We could not select these features because *pml-testing.csv* ignores time series
+and treats each observation independetly. 
+
+Therefore, we selected following features which are fully observed:
+
+```{r}
+features<-c(  
+    # Belt Sensor
+    "roll_belt",	        "pitch_belt",	        "yaw_belt", 
+    "gyros_belt_x",	        "gyros_belt_y",	        "gyros_belt_z",
+    "accel_belt_x",	        "accel_belt_y",	        "accel_belt_z",
+    "magnet_belt_x",    	"magnet_belt_y",    	"magnet_belt_z",
+    "total_accel_belt",
+
+    # Arm Sensor
+    "roll_arm",	            "pitch_arm",	        "yaw_arm",
+    "gyros_arm_x",	        "gyros_arm_y",	        "gyros_arm_z",
+    "accel_arm_x",	        "accel_arm_y",	        "accel_arm_z",
+    "magnet_arm_x",	        "magnet_arm_y",    	    "magnet_arm_z",
+    "total_accel_arm", 
+
+    # Dumbell Sensor
+    "roll_dumbbell",	    "pitch_dumbbell",	    "yaw_dumbbell",
+    "gyros_dumbbell_x",	    "gyros_dumbbell_y",	    "gyros_dumbbell_z",
+    "accel_dumbbell_x",	    "accel_dumbbell_y",	    "accel_dumbbell_z",
+    "magnet_dumbbell_x",	"magnet_dumbbell_y",	"magnet_dumbbell_z",
+    "total_accel_dumbbell",
+
+    # Forearm Sensor
+    "roll_forearm",		    "pitch_forearm",		"yaw_forearm",
+    "gyros_forearm_x",    	"gyros_forearm_y",    	"gyros_forearm_z",
+    "accel_forearm_x",    	"accel_forearm_y",	    "accel_forearm_z",
+    "magnet_forearm_x",	    "magnet_forearm_y",	    "magnet_forearm_z",
+    "total_accel_forearm")
+
+dataset <- dataset[c(features, "classe")]
+sample <- sample[features]
+```
+
+
+# Preprocessing
+The original data is time series which means that labels are ordered methodically 
+because a subject was exercising in a certain mannar until the mesurement finished.
+We could see this by runing following code which shows first 100 obnservations.
+```{r}
+head(dataset$classe, 100)
+```
+
+As can be seen, all of the first 100 observations are labelled *A*.
+This may cause a problem in training because a classifier is trained with data labelled *A* for a while.
+To address this problem, the observations should be shuffled:
+```{r}
+#Shuffle dataset set
+set.seed(999)
+indices <- sample(1:length(dataset$classe), length(dataset$classe))
+dataset<-dataset[indices,]
+rownames(dataset)<-1:length(dataset$classe)
+head(dataset$classe, 100)
+```
+
+Finally, *dataset* is split into *training* and *testing*.
+*testing* is used to evaluate the accuracy of the classifier we trained in *Model* section.
+```{r}
+inTrain  <- createDataPartition(y=dataset$classe, p=0.8, list=FALSE)
+training <- dataset[inTrain,]; testing <- dataset[-inTrain,]  
+```
+
+#Modeling
+##Decision tree
+In this section, we tried two models for evaluating quality of the exercise.
+Model must be the one which can classify observation into one of several classes 
+because the problem is multiclass classification.
+
+For a start, we chose decision tree as prime example of this which can deal with multiclass classification. 
+In traing, 10 fold cross validation is applied to determine the appropreate values 
+for the parameters in training decision tree.
+```{r, message=FALSE, warning=FALSE, cache=TRUE}
+ctr <- trainControl(method="cv", number=10)
+model.rpart <- train(classe~., method="rpart", trControl = ctr, data = training)
+model.rpart
+```
+
+As the result of applying cross varidation, the result shows that 
+the model cp = 0.0340899 was selected as it performed most accurately in the three models.
+However, the accuracy is very low as the outcome of following code shows 
+which computes the accuracy for *testing* set -approximately 50 % of accuracy was achieved.
+```{r, message=FALSE, warning=FALSE}
+predicted_classe <- predict(model.rpart, testing)
+sum(testing$classe==predicted_classe)/length(predicted_classe)
+```
+
+##Boosting
+As the outcome of training decision tree shows, decision tree parformed baddly. 
+As a second step, we build up another model of gradient boosted tree 
+which aimes to enhence accuracy by combining trees. 
+We applied 10 fold cross validation in training again to select the best model.
+Following code train the second model and shows the outcome.
+```{r, message=FALSE, warning=FALSE, cache=TRUE}
+ctr <- trainControl(method="cv", number=10)
+model.gbm <- train(classe~., method="gbm", trControl = ctr, data = training, verbose=FALSE)
+model.gbm
+```
+
+In the same way as we saw in trainig decision tree, the best model was selected 
+as a result of employing 10 fold cross validation.
+In this case the model with n.trees = 150 and interaction.depth = 3 is selected.
+
+Expected accuracy of the model is 96% as follwoing code shows and 
+it can be seen from the table that most of the observations in the *testing* 
+set is classified correctly. 
+```{r, message=FALSE, warning=FALSE}
+predicted_classe <- predict(model.gbm, testing)
+table(testing$classe, predicted_classe)
+sum(testing$classe==predicted_classe)/length(predicted_classe)
+```
+
+#Predicting class of 20 sample testset
+The following code get *model.gbm* predict 20 samples. 
+Although correct labels are not given in *sample*, 
+we confirmed that they produces correct labels in the final quiz.  
+```{r,message=FALSE, warning=FALSE}
+predict(model.gbm, sample)
+```
